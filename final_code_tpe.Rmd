@@ -1,0 +1,196 @@
+---
+title: "final_code_tpe"
+output: html_document
+---
+
+
+
+```{r}
+df = read.csv("credit_small.csv")
+head(df) #1000 x 4
+
+
+library(caret) #preprocessing et utilisation de l'algorithme de référence
+library(plotrix) #pour dessiner le cercle
+
+#df
+preProcessParams = preProcess(df[, 1:2], method = c("center", "scale"))
+quantVar = predict(preProcessParams, df[, 1:2])
+df = cbind(quantVar, Default = df$Default) ###à modifier : on prendra ensuite toutes la variables
+
+#cross validation 
+#Pour avoir la même randomisation à chaque fois
+set.seed(1)
+
+n = nrow(df)
+id.x = sample(1:n, 0.7*n)
+df_train = df[id.x, ]
+df_test = df[-id.x,c(1,2)] ###à modifier 
+y_observed = df[-id.x, "Default"]
+
+
+plot(df_train[,c(1,2)], col=c("black", "red")[df_train$Default +1], xlim = c(1.2,1.3), ylim= c(1.8,2.5), main="exemple de classification KNN")
+legend(title = "Default","topright", legend = c("0", "1"), col = c("black", "red"), pch=1)
+points(point, col= "orange", lwd=4) #(36, 9055)
+draw.circle(point.x, point.y, radius = 0.015, border = "green")
+draw.circle(point.x, point.y, radius = 0.0045, border = "dark green")
+
+```
+
+
+```{r}
+#Version la plus simple du KNN
+
+knn_clf = function(data, predict, k) {
+  #problème : il faut avoir juste predict[j,1:2] pour row
+  #row correspond à la ligne de df_test
+  compute_class = function(row, k) {
+    n = nrow(data)
+    distances = NULL
+    for (i in 1:n) {
+      distances[i] = dist(rbind(data[i,1:2], row), method = "euclidean")
+    }
+    m = cbind(data, distances)
+    #On réarrange la matrice par distance croissante 
+    m = m[order(distances, decreasing = FALSE),]
+    #On garde les "k" plus proche voisins
+    m = m[1:k,]
+    #On prend la classe la plus représentée (= le mode)
+    class = names(sort(table(m[,"Default"]), decreasing = TRUE))[1]
+    return(class)
+  }
+  
+  results = apply(predict[,1:2], 1, (function (row) compute_class(row, k))) ###à modifier quand on prendra en compte toutes les vars 
+  return(as.numeric(results))
+}
+
+start_time = Sys.time()
+y_predicted = knn_clf(df_train, df_test, 7)
+end_time = Sys.time()
+running_time = end_time - start_time
+running_time
+```
+
+```{r}
+#Définition de la fonction d'erreur
+error_rate = function(y_predicted, y_observed) {
+    er = 1 - mean(y_predicted == y_observed) # 1 - accuracy
+    return(er)
+}
+
+print(paste("Le taux d'erreur est de : ", error_rate(y_observed, y_predicted)))
+```
+
+```{r}
+#VERSUS le programme sur ordinateur 
+library(class)
+start_time = Sys.time()
+y.new.predict = knn(train = df_train[,1:2], test = df_test, cl = df_train[,3], k=7)
+end_time = Sys.time()
+running_time = end_time - start_time
+running_time
+
+error_rate(y_observed, y.new.predict)
+```
+
+```{r}
+library(pdist) #pdist
+library(tidyr) #tidyr
+
+knn_clf_matrice = function(data, predict, k) {
+  n1 = nrow(data)
+  n2 = nrow(predict)
+  
+  dists <- pdist(X= data, Y=predict)
+  m = as.matrix(dists)
+  #colnames(m) = 1:n1
+  #row.names(m) = 1:n2
+  
+  #L'opération suivante nous permet d'appliquer la fonction order à chaque ligne de la matrice (indépendamment des autres)
+  m_order = lapply(split(m, f = 1:n2), order)
+  #On note que la matrice pour la suite est transposée (Yi en ligne et les Xi en colonnes)
+  m_order = simplify2array(m_order)
+  #Je cherche à ne garder que les indexes qui ont un ordre compris entre 1 et k pour chaque vecteur 
+  m_indices = which(m_order >= 1 & m_order <= k, arr.ind = TRUE)
+  
+  tmp = cbind(data.frame(m_indices), index= 1:nrow(m_indices))
+  tmp = spread(tmp, key = col, value = row)
+  
+  #On obtient ensuite une matrice de 0 et de 1 
+  m_class = apply(tmp[,2:ncol(tmp)], c(1,2), function(x) {data$Default[x]})
+  
+  class_vote = function(col) {
+    names(sort(table(col), decreasing = T))[1]
+  }
+  y = as.numeric(apply(m_class, 2, class_vote))
+  
+  return(y)
+}
+
+start_time = Sys.time()
+y_predicted = knn_clf_matrice(df_train, df_test, 7)
+end_time = Sys.time()
+running_time = end_time - start_time
+running_time
+```
+
+```{r}
+error_rate(y_observed, y_predicted)
+```
+
+```{r}
+#K Fold cross-validation "à la main"
+#On commence par randomiser notre échantillon original  
+cv_knn_matrice = function(data, k) { ##data = X_train
+  data = data[sample(nrow(data)),] 
+  #On divise l'échantillon intial en k échantillons
+  id_groups = split(1:700, 1:10)
+  df_cv = NULL
+  for (i in 1:10) {
+    df_cv[[i]] = data[id_groups[[i]],]
+  }
+  
+  #On sélectionne un des k échantillons comme ech. de validation et les k-1 constitueront l'ensemble d'apprentissage
+  accuracy = NULL
+  for (j in 1:10) {
+    range = 1:10
+    range = range[-j]
+    X_test = df_cv[[j]]
+    y_observed = X_test["Default"]
+    for (i in range) { 
+      X_train = rbind(X_train, df_cv[[i]]) #630 x 3
+    }
+    y_predicted = knn_clf_matrice(X_train, X_test, k)
+    y_observed = 
+    accuracy[j] = error_rate(y_observed, y_predicted)
+  }
+  return(mean(accuracy))
+}
+
+error_rate = function(y_predicted, y_observed) {
+    er = 1 - mean(y_predicted == y_observed) # 1 - accuracy
+    return(er)
+}
+
+accuracy = NULL
+for (k in seq(1,100, 10))
+  accuracy[k] = cv_knn_matrice(df_train, k)
+```
+
+```{r}
+#Comparaison avec l'algorithme de référence 
+df_train$Default = as.factor(df_train$Default)
+library(caret)
+trctrl <- trainControl(method = "cv", number = 10)
+knn_fit <- train(Default ~., data = df_train, method = "knn",
+ trControl=trctrl,
+ preProcess = c("center", "scale"),
+ tuneLength = 100
+)
+knn_fit
+```
+
+```{r}
+plot(knn_fit)
+```
+
